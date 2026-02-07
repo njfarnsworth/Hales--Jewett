@@ -3,7 +3,7 @@ include("dpll.jl")
 
 println("cnf loading...")
 
-cnf = load_cnf("xor.cnf")
+cnf = load_cnf("unsat.cnf")
 
 DPLL_NODES[] = 0
 DPLL_DECISIONS[] = 0
