@@ -1,6 +1,8 @@
 include("parser.jl")
 using Random
 using .DIMACS
+const DPLL_NODES = Ref(0)    
+const DPLL_DECISIONS = Ref(0)
 
 cnf = load_cnf("exdimacs.cnf")
 
@@ -130,23 +132,23 @@ end
 
 function dpll(cnf::CNF, model::Vector{Int8})
     # runs the main algorithm
-    if !unit_propagate!(cnf, model)
-        # clause assignment failed immediately
+    DPLL_NODES[] += 1
+
+    if !simplify!(cnf, model)
         return false, nothing
     end
 
     # check status
     stat = formula_status(cnf, model)
     if stat == :sat
+        @assert check_model(cnf, model)
         return true, model
     elseif stat == :conflict
         return false, nothing
     end
-    
+
     lit = choose_random_literal(model, cnf.nvars)
-    if lit == 0
-        return (stat == :sat), model
-    end
+    DPLL_DECISIONS[] += 1
 
     m1 = copy(model)
     if assign_lit!(lit, m1)
@@ -179,19 +181,67 @@ function check_model(cnf::CNF, model::Vector{Int8})::Bool
 end
 
 function find_pure_literal(cnf::CNF, model::Vector{Int8})::Int
-    n = cnf.vars
+    n = cnf.nvars
     seen_pos = falses(n)
     seen_neg = falses(n)
 
-    for c in cnf.clauses()
+    for c in cnf.clauses
         if clause_status(c.lits, model) == :sat
             continue
         end
-        for lit in lits
+        for lit in c.lits
             v = abs(lit)
             if model[v] != 0 # variable already assigned, continue
                 continue
             end
+            if lit > 0 # find sign of lit
+                seen_pos[v] = true
+            else
+                seen_neg[v] = true
+            end
+        end
+    end
+
+    for v in 1:n
+        if model[v] == 0
+            if seen_pos[v] && !seen_neg[v]
+                return v
+            elseif seen_neg[v] && !seen_pos[v]
+                return -v
+            end
+        end
+    end
+    return 0
+end
+
+function pure_eliminate!(cnf::CNF, model::Vector{Int8})::Bool
+    while true
+        if formula_status(cnf, model) == :conflict
+            return false
+        end
+
+        p = find_pure_literal(cnf, model)
+        if p == 0
+            return true
+        end
+
+        if !assign_lit!(p, model)
+            return false 
+        end
+    end
+end
+
+function simplify!(cnf::CNF, model::Vector{Int8})
+    while true
+        if !unit_propagate!(cnf, model)
+            return false
+        end
+        p = find_pure_literal(cnf, model)
+        if p == 0
+            return true
+        end
+        if !assign_lit!(p, model)
+            return false
         end
     end
 end
