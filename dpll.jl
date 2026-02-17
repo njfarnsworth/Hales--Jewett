@@ -4,10 +4,6 @@ using .DIMACS
 const DPLL_NODES = Ref(0)    
 const DPLL_DECISIONS = Ref(0)
 
-cnf = load_cnf("exdimacs.cnf")
-
-model = fill(Int8(0), cnf.nvars) # empty model
-
 @inline lit_var(lit::Int) = abs(lit) # abs of a literal
 
 @inline function lit_is_true(lit::Int, model::Vector{Int8})::Bool
