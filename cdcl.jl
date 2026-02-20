@@ -226,3 +226,97 @@ function propagate!(S::Solver)::Int
         end
     end
 end
+
+function enqueue_unit_clauses!(S::Solver)::Bool
+    # decision level 0 assign all units 
+    for (cid, clause) in enumerate(S.clauses)
+        if length(clause) == 1
+            lit = clause[1]
+            if !enqueue!(S, lit, cid)
+                return false
+            end
+        end
+    end
+    return true 
+end
+
+function initial_propagate(S::Solver)::Int
+    # performs level 0 unit propagation
+    ok = enqueue_unit_clauses!(S::Solver)
+    if !ok
+        return -1 # unsat at root 
+    end
+    conflict = propagate!(S)
+    return conflict == 0 ? 0 : conflict 
+end
+
+function pick_branch_lit(S)
+    # decision/polarity, basic for now --> improve later 
+    for v in 1:S.nvars
+        if S.model[v] == Int8(0)
+            return v
+        end
+    end
+    return 0 # means all assigned 
+end
+
+function solve_no_learning!(S::Solver)::Symbol
+    # look for issues at the start
+    root_conflict = initial_propagate!(S)
+    if root_conflict == -1
+        return :unsat # issue with root unit assignments
+    elseif root_conflict != 0
+        return :unsat # issue with propagation after forced assignment 
+    end
+
+    decision_lits = Int[] # ???
+    tried_flip = Bool[] # ???
+
+    while true
+        lit = pick_branch_lit(S) # all literals have been assigned with no conflict 
+        if lit == 0
+            return :sat 
+        end
+  
+        # start a new decision level
+        new_decision_level!(S)
+        push!(decision_lits, lit)
+        push!(tried_flip, false)
+        enqueue!(S, lit, 0)
+
+        while true
+            conflict = propagate!(S)
+            if conflict == 0
+                break # no conflict, make the next decision
+            end
+            
+            # at this point, assume we've hit a conflict
+
+            lvl = decision_level(S)
+            if lvl == 0 # if the conflict is at the root, unsat
+                return :unsat
+            end
+
+            if !tried_flip[lvl]
+
+                tried_flip[lvl] == true 
+                backtrack!(S, lvl-1) # backtrack to the start of the level
+
+                # recreate the decision level with the flipped literal
+                new_decision_level!(S) 
+                flipped_lit = -1*decision_lits[lvl]
+                enqueue!(S, flipped_lit, 0) # put the flipped lit in as a decision
+
+            else
+                # both branches failed, backtrack one more level back 
+                backtrack!(S, lvl-1)
+                pop!(decision_lits)
+                pop!(tried_flip)
+                break 
+            end
+        end
+
+
+  end 
+
+end
