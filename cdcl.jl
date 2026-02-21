@@ -75,14 +75,10 @@ function Solver(cnf::CNF)
             push!(watchlist[lit_index(c[1])], cid)
             push!(watchlist[lit_index(c[2])], cid)
         end
-
-
     end
-
 
     return Solver(n,cls,model,level,antecedent,
     trail, trail_lim, qhead, watchlist, watch1, watch2)
-
 end
 
 @inline decision_level(S::Solver) = length(S.trail_lim) # returns the current decision level of the solver
@@ -135,17 +131,14 @@ function backtrack!(S::Solver, lvl::Int)
     S.qhead = min(S.qhead, length(S.trail)+1) # resets qhead if it is now in an illegal range
 
     return nothing
-
 end
 
 @inline function lit_index(lit::Int)::Int
     v = abs(lit)
     return 2v - (lit < 0 ? 0 : 1)
-
 end
 
 function propagate!(S::Solver)::Int
-
     while S.qhead <= length(S.trail) # while there are still literals to propagate
         lit = S.trail[S.qhead]
         S.qhead += 1
@@ -222,9 +215,9 @@ function propagate!(S::Solver)::Int
             else 
                 return cid # other lit was also false
             end
-
         end
     end
+    return 0
 end
 
 function enqueue_unit_clauses!(S::Solver)::Bool
@@ -240,14 +233,14 @@ function enqueue_unit_clauses!(S::Solver)::Bool
     return true 
 end
 
-function initial_propagate(S::Solver)::Int
+function initial_propagate!(S::Solver)::Int
     # performs level 0 unit propagation
-    ok = enqueue_unit_clauses!(S::Solver)
+    ok = enqueue_unit_clauses!(S)
     if !ok
         return -1 # unsat at root 
     end
     conflict = propagate!(S)
-    return conflict == 0 ? 0 : conflict 
+    return conflict
 end
 
 function pick_branch_lit(S)
@@ -261,62 +254,223 @@ function pick_branch_lit(S)
 end
 
 function solve_no_learning!(S::Solver)::Symbol
-    # look for issues at the start
     root_conflict = initial_propagate!(S)
     if root_conflict == -1
-        return :unsat # issue with root unit assignments
+        return :unsat
     elseif root_conflict != 0
-        return :unsat # issue with propagation after forced assignment 
+        return :unsat
     end
 
-    decision_lits = Int[] # ???
-    tried_flip = Bool[] # ???
+    tried_flip = Bool[]  # tried_flip[lvl] tells whether we've flipped that level already
 
     while true
-        lit = pick_branch_lit(S) # all literals have been assigned with no conflict 
+        lit = pick_branch_lit(S)
         if lit == 0
-            return :sat 
+            return :sat
         end
-  
-        # start a new decision level
+
+        # Make a decision at a new level
         new_decision_level!(S)
-        push!(decision_lits, lit)
         push!(tried_flip, false)
-        enqueue!(S, lit, 0)
+        enqueue!(S, lit, 0)  # antecedent=0 means "decision"
 
         while true
             conflict = propagate!(S)
             if conflict == 0
-                break # no conflict, make the next decision
+                break  # stable, go pick another decision
             end
-            
-            # at this point, assume we've hit a conflict
 
             lvl = decision_level(S)
-            if lvl == 0 # if the conflict is at the root, unsat
+            if lvl == 0
                 return :unsat
             end
 
             if !tried_flip[lvl]
+                # flip this decision level
+                tried_flip[lvl] = true
+                dlit = decision_lit_at_level(S, lvl)
 
-                tried_flip[lvl] == true 
-                backtrack!(S, lvl-1) # backtrack to the start of the level
+                backtrack!(S, lvl - 1)
 
-                # recreate the decision level with the flipped literal
-                new_decision_level!(S) 
-                flipped_lit = -1*decision_lits[lvl]
-                enqueue!(S, flipped_lit, 0) # put the flipped lit in as a decision
-
+                # recreate same level and enqueue flipped decision
+                new_decision_level!(S)
+                enqueue!(S, -dlit, 0)
             else
-                # both branches failed, backtrack one more level back 
-                backtrack!(S, lvl-1)
-                pop!(decision_lits)
+                # both branches failed at this level, go up
+                backtrack!(S, lvl - 1)
                 pop!(tried_flip)
-                break 
+                break
+            end
+        end
+    end
+end
+
+@inline function decision_lit_at_level(S::Solver, lvl::Int)::Int
+    @assert 1 <= lvl <= decision_level(S)
+    return S.trail[S.trail_lim[lvl]]
+end
+
+function add_clause!(S::Solver, c::Vector{Int})::Int
+    # adds a clause to the solver 
+    push!(S.clauses, c)
+    cid = length(S.clauses)
+
+    push!(S.watch1, 1)
+    push!(S.watch2, length(c) == 1 ? 1 : 2)
+
+    if length(c) == 1
+        push!(S.watchlist[lit_index(c[1])], cid)
+    elseif length(c) >= 2
+        push!(S.watchlist[lit_index(c[1])], cid)
+        push!(S.watchlist[lit_index(c[2])], cid)
+    end
+    return cid 
+end
+
+function analyze_conflict_1uip(S::Solver, conflict_cid::Int)
+    cur_lvl = decision_level(S)
+
+    seen = falses(S.nvars)
+    lit_of_var = fill(0, S.nvars)  # stores the signed lit currently in the working clause
+    num_cur = Ref(0)
+
+    # --- helper to add a literal to the working clause (one per var) ---
+    @inline function add_lit!(lit::Int)
+        v = abs(lit)
+        if !seen[v]
+            seen[v] = true
+            lit_of_var[v] = lit
+            if S.level[v] == cur_lvl
+                num_cur[] += 1
+            end
+        end
+        return nothing
+    end
+
+    # --- seed with conflict clause ---
+    for lit in S.clauses[conflict_cid]
+        add_lit!(lit)
+    end
+
+    idx = length(S.trail)
+
+    # --- resolve until only one current-level literal remains ---
+    while num_cur[] > 1
+        # pick most recent current-level var that is in the clause
+        pivot_lit = 0
+        while true
+            pivot_lit = S.trail[idx]
+            idx -= 1
+            v = abs(pivot_lit)
+            if seen[v] && S.level[v] == cur_lvl
+                break
             end
         end
 
+        v = abs(pivot_lit)
+        reason_cid = S.antecedent[v]
+        @assert reason_cid != 0  # pivot should not be a decision
 
-  end 
+        # remove pivot var from the working clause
+        seen[v] = false
+        lit_of_var[v] = 0
+        num_cur[] -= 1
 
+        # add literals from reason clause except pivot var
+        for q in S.clauses[reason_cid]
+            if abs(q) == v
+                continue
+            end
+            add_lit!(q)
+        end
+    end
+
+    # --- build the final learned clause from lit_of_var ---
+    learned = Int[]
+    learned_size_guess = 0
+    for v in 1:S.nvars
+        if seen[v]
+            learned_size_guess += 1
+        end
+    end
+    sizehint!(learned, learned_size_guess)
+
+    for v in 1:S.nvars
+        if seen[v]
+            push!(learned, lit_of_var[v])
+        end
+    end
+
+    # --- find asserting literal (only one at cur_lvl) ---
+    asserting = 0
+    for lit in learned
+        if S.level[abs(lit)] == cur_lvl
+            asserting = lit
+            break
+        end
+    end
+    @assert asserting != 0
+
+    # --- compute backjump level (max level among others) ---
+    backlvl = 0
+    for lit in learned
+        v = abs(lit)
+        if v != abs(asserting)
+            backlvl = max(backlvl, S.level[v])
+        end
+    end
+
+    return learned, asserting, backlvl
+end
+
+function solve_with_learning!(S::Solver)::Symbol
+    print("Solving with learning!")
+    root_conflict = initial_propagate!(S)
+    if root_conflict == -1 || root_conflict != 0
+        return :unsat
+    end
+
+    while true
+        lit = pick_branch_lit(S)
+        if lit == 0
+            return :sat
+        end
+
+        new_decision_level!(S)
+        enqueue!(S, lit, 0) # add lit as a decision variable 
+
+        while true
+            conflict = propagate!(S) # perform unit prop after setting the new deicison variable
+            if conflict == 0 
+                break # there is no conflict, continue to next decision variable
+            end
+
+            if decision_level(S) == 0
+                return :unsat # conflict at the root, UNSAT
+            end
+
+            learned, asserting, backlvl = analyze_conflict_1uip(S, conflict)
+
+            if isempty(learned)
+                return :unsat
+            end
+            
+            move_to_front!(learned, asserting)
+            learned_cid = add_clause!(S, learned)
+
+            backtrack!(S, backlvl)
+
+            # learned clause should be unit after backtrack, so enqueue asserting literal
+
+            ok = enqueue!(S, asserting, learned_cid) # force the assering lit to be true 
+            @assert ok
+            # continue this loop until no more conflicts
+        end
+    end
+end
+
+function move_to_front!(c::Vector{Int}, lit::Int)
+    j = findfirst(==(lit), c)
+    j === nothing && return
+    c[1], c[j] = c[j], c[1]
 end

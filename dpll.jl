@@ -1,4 +1,3 @@
-include("parser.jl")
 using Random
 using .DIMACS
 const DPLL_NODES = Ref(0)    
