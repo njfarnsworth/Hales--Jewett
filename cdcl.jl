@@ -1,6 +1,8 @@
 include("parser.jl")
 include("dpll.jl")
+include("stats.jl")
 using .DIMACS
+using .CDCLStats
 
 mutable struct Solver 
     # problem-specific
@@ -22,6 +24,7 @@ mutable struct Solver
     watch1::Vector{Int} # per clause, index of watch1
     watch2::Vector{Int}  # per clause, index of watch2
 
+    st::Stats
 end
 
 @inline function want_value(lit::Int)::Int8
@@ -77,8 +80,8 @@ function Solver(cnf::CNF)
         end
     end
 
-    return Solver(n,cls,model,level,antecedent,
-    trail, trail_lim, qhead, watchlist, watch1, watch2)
+    return Solver(n,cls,model,level,antecedent, trail, 
+    trail_lim, qhead, watchlist, watch1, watch2, Stats())
 end
 
 @inline decision_level(S::Solver) = length(S.trail_lim) # returns the current decision level of the solver
@@ -100,6 +103,15 @@ function enqueue!(S::Solver, lit::Int, ant_cid::Int)::Bool
         S.level[v] = decision_level(S)
         S.antecedent[v] = ant_cid
         push!(S.trail, lit) # add the literal to the trail
+
+        # --- instrumentation ---
+        S.st.enqueues += 1
+        if ant_cid == 0
+            S.st.decisions += 1
+        else
+            S.st.implications += 1
+        end
+
         return true
     else
         return cur == want 
@@ -108,6 +120,9 @@ end
 
 function backtrack!(S::Solver, lvl::Int)
     @assert 0 <= lvl <= decision_level(S) # check that the backtrack level is valid 
+
+    # --- instrumentation ---
+    S.st.backtracks += 1
 
     # if lvl == 0, clear everything. else, clear everything past the end of lvl 
     if lvl == 0
@@ -142,6 +157,9 @@ function propagate!(S::Solver)::Int
     while S.qhead <= length(S.trail) # while there are still literals to propagate
         lit = S.trail[S.qhead]
         S.qhead += 1
+
+        # --- instrumentation ---
+        S.st.propagations += 1
 
         false_lit = -1*lit
         wl_index = lit_index(false_lit)
@@ -209,10 +227,14 @@ function propagate!(S::Solver)::Int
             other_val = value_lit(other_lit, S.model)
             if other_val == Int8(0) # unit clause, 
                 if !enqueue!(S, other_lit, cid)
+                    # --- instrumentation ---
+                    S.st.conflicts += 1
                     return cid # cid caused a conflict
                 end
                 i += 1 # otherwise, we're fine 
             else 
+                # --- instrumentation ---
+                S.st.conflicts += 1
                 return cid # other lit was also false
             end
         end
@@ -254,10 +276,16 @@ function pick_branch_lit(S)
 end
 
 function solve_no_learning!(S::Solver)::Symbol
+    # --- instrumentation ---
+    reset!(S.st)
+    start_timer!(S.st)
+
     root_conflict = initial_propagate!(S)
     if root_conflict == -1
+        stop_timer!(S.st)
         return :unsat
     elseif root_conflict != 0
+        stop_timer!(S.st)
         return :unsat
     end
 
@@ -266,6 +294,7 @@ function solve_no_learning!(S::Solver)::Symbol
     while true
         lit = pick_branch_lit(S)
         if lit == 0
+            stop_timer!(S.st)
             return :sat
         end
 
@@ -282,6 +311,7 @@ function solve_no_learning!(S::Solver)::Symbol
 
             lvl = decision_level(S)
             if lvl == 0
+                stop_timer!(S.st)
                 return :unsat
             end
 
@@ -425,14 +455,21 @@ end
 
 function solve_with_learning!(S::Solver)::Symbol
     print("Solving with learning!")
+
+    # --- instrumentation ---
+    reset!(S.st)
+    start_timer!(S.st)
+
     root_conflict = initial_propagate!(S)
     if root_conflict == -1 || root_conflict != 0
+        stop_timer!(S.st)
         return :unsat
     end
 
     while true
         lit = pick_branch_lit(S)
         if lit == 0
+            stop_timer!(S.st)
             return :sat
         end
 
@@ -446,17 +483,22 @@ function solve_with_learning!(S::Solver)::Symbol
             end
 
             if decision_level(S) == 0
+                stop_timer!(S.st)
                 return :unsat # conflict at the root, UNSAT
             end
 
             learned, asserting, backlvl = analyze_conflict_1uip(S, conflict)
 
             if isempty(learned)
+                stop_timer!(S.st)
                 return :unsat
             end
             
             move_to_front!(learned, asserting)
             learned_cid = add_clause!(S, learned)
+
+            # --- instrumentation ---
+            S.st.learned_clauses += 1
 
             backtrack!(S, backlvl)
 

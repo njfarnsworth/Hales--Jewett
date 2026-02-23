@@ -1,6 +1,7 @@
 # test_cdcl.jl
 include("cdcl.jl")
 using .DIMACS
+using .CDCLStats
 
 function run_file(filename::String)
     # --- Load CNF from file ---
@@ -74,6 +75,9 @@ function run_file(filename::String)
 
     println("\nTotal clauses after solving:")
     println(length(S.clauses))
+
+    print_stats(S.st)
 end
+
 
 run_file("cnfs/cdcl_test.cnf")
