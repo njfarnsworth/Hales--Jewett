@@ -1,8 +1,13 @@
 include("parser.jl")
 include("dpll.jl")
 include("stats.jl")
+include("vsids.jl")
+include("phasesaving.jl")
+
 using .DIMACS
 using .CDCLStats
+using .VSIDS
+using .PhaseSaving
 
 mutable struct Solver 
     # problem-specific
@@ -25,6 +30,8 @@ mutable struct Solver
     watch2::Vector{Int}  # per clause, index of watch2
 
     st::Stats
+    vsids::VSIDSState
+    phase::PhaseState
 end
 
 @inline function want_value(lit::Int)::Int8
@@ -80,8 +87,11 @@ function Solver(cnf::CNF)
         end
     end
 
+    vs = init_vsids(n, 0.95, 1e100)
+    ph = init_phase(n)
+
     return Solver(n,cls,model,level,antecedent, trail, 
-    trail_lim, qhead, watchlist, watch1, watch2, Stats())
+    trail_lim, qhead, watchlist, watch1, watch2, Stats(), vs, ph)
 end
 
 @inline decision_level(S::Solver) = length(S.trail_lim) # returns the current decision level of the solver
@@ -100,6 +110,7 @@ function enqueue!(S::Solver, lit::Int, ant_cid::Int)::Bool
 
     if cur == 0 # if the literal is unassigned
         S.model[v] = want
+        record_phase!(S.phase, v, want)
         S.level[v] = decision_level(S)
         S.antecedent[v] = ant_cid
         push!(S.trail, lit) # add the literal to the trail
@@ -265,18 +276,14 @@ function initial_propagate!(S::Solver)::Int
     return conflict
 end
 
-function pick_branch_lit(S)
-    # decision/polarity, basic for now --> improve later 
-    for v in 1:S.nvars
-        if S.model[v] == Int8(0)
-            return v
-        end
-    end
-    return 0 # means all assigned 
+function pick_branch_lit(S)::Int
+    v = pick_branch_var(S.vsids, S.model) # choose the variable using vsids
+    v == 0 && return 0 # if all variables are already assigned
+
+    return choose_literal(S.phase, v, Int8(1)) # choose its sign with phasesaving 
 end
 
 function solve_no_learning!(S::Solver)::Symbol
-    # --- instrumentation ---
     reset!(S.st)
     start_timer!(S.st)
 
@@ -364,7 +371,7 @@ function analyze_conflict_1uip(S::Solver, conflict_cid::Int)
     lit_of_var = fill(0, S.nvars)  # stores the signed lit currently in the working clause
     num_cur = Ref(0)
 
-    # --- helper to add a literal to the working clause (one per var) ---
+    #  helper to add a literal to the working clause (one per var) 
     @inline function add_lit!(lit::Int)
         v = abs(lit)
         if !seen[v]
@@ -456,7 +463,6 @@ end
 function solve_with_learning!(S::Solver)::Symbol
     print("Solving with learning!")
 
-    # --- instrumentation ---
     reset!(S.st)
     start_timer!(S.st)
 
@@ -494,6 +500,8 @@ function solve_with_learning!(S::Solver)::Symbol
                 return :unsat
             end
             
+            bump_clause!(S.vsids, learned)
+
             move_to_front!(learned, asserting)
             learned_cid = add_clause!(S, learned)
 
