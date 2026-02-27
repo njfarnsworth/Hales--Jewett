@@ -4,7 +4,6 @@ using .DIMACS
 using .CDCLStats
 
 function run_file(filename::String)
-    # --- Load CNF from file ---
     cnf = DIMACS.load_cnf(filename)
 
     println("Loaded CNF:")
@@ -12,72 +11,44 @@ function run_file(filename::String)
     println("  Variables: ", cnf.nvars)
     println("  Clauses:   ", length(cnf.clauses))
 
-    # --- Initialize solver ---
     S = Solver(cnf)
 
     println("\nInitial model:")
     println(S.model)
 
-    # --- Root: enqueue all unit clauses at level 0 ---
-    for (cid, c) in enumerate(S.clauses)   # note: S.clauses is Vector{Vector{Int}}
-        if length(c) == 1
-            lit = c[1]
-            println("Enqueueing unit literal ", lit, " from clause ", cid)
-            ok = enqueue!(S, lit, cid)
-            if !ok
-                println("\nContradiction while enqueueing unit clauses at level 0.")
-                println("Result: UNSAT")
-                return
-            end
-        end
-    end
+    # Optional sanity peek at the new structures
+    println("\nVSIDS:")
+    println("  decay    = ", S.vsids.decay)
+    println("  var_inc  = ", S.vsids.var_inc)
+    println("Phase state (first 10 vars):")
+    println(S.phase.phase[1:min(10, S.nvars)])
 
-    println("\nTrail before propagation:")
-    println(S.trail)
-
-    # --- Root propagation ---
-    conflict = propagate!(S)
-
-    println("\nPropagation finished.")
-    println("Conflict clause id: ", conflict)
-
-    if conflict != 0
-        println("\nConflict at level 0 ⇒ UNSAT")
-        println("\nFinal trail:")
-        println(S.trail)
-        println("\nModel:")
-        println(S.model)
-        println("\nAntecedents:")
-        println(S.antecedent)
-        println("\nDecision levels:")
-        println(S.level)
-        return
-    else
-        println("\nNo conflict at level 0 ⇒ running solve_with_learning!()")
-    end
-
-    # --- Full solve (CDCL with learning) ---
+    # Run full CDCL (it will do root unit enqueue + propagation internally)
     result = solve_with_learning!(S)
 
     println("\nResult: ", result)
 
-    println("\nFinal trail:")
-    println(S.trail)
+    println("\nFinal trail length: ", length(S.trail))
+    println("Final decision level: ", decision_level(S))
 
-    println("\nModel:")
-    println(S.model)
+    println("\nModel (first 20 vars):")
+    println(S.model[1:min(20, S.nvars)])
 
-    println("\nAntecedents:")
-    println(S.antecedent)
+    println("\nTotal clauses after solving: ", length(S.clauses))
 
-    println("\nDecision levels:")
-    println(S.level)
-
-    println("\nTotal clauses after solving:")
-    println(length(S.clauses))
+    # Show top-activity variables (quick VSIDS sanity check)
+    k = min(10, S.nvars)
+    order = sortperm(S.vsids.activity; rev=true)
+    println("\nTop VSIDS activities:")
+    for i in 1:k
+        v = order[i]
+        println("  v=", v, " activity=", S.vsids.activity[v], " saved_phase=", S.phase.phase[v])
+    end
 
     print_stats(S.st)
 end
 
-
-run_file("cnfs/cdcl_test.cnf")
+# Try a few files
+run_file("cnfs/hj/hj33_4.cnf")
+# run_file("cnfs/tiny_sat.cnf")
+# run_file("cnfs/tiny_unsat.cnf")

@@ -7,17 +7,33 @@ mutable struct VSIDSState
     var_inc::Float64
     decay::Float64
     max_thresh::Float64
+
+    heap_a::Vector{Float64} # activity heap
+    heap_v::Vector{Float64} # variable heap 
 end
 
 function init_vsids(nvars::Int, decay::Float64 = 0.95, max_thresh::Float64 = 1e100)
     # initializes vsids for a solver with nvar variables 
     activity = zeros(Float64, nvars)
-    return VSIDSState(activity, 1.0, decay, max_thresh)
+    heap_a = Float64[]
+    heap_v = Int[]
+    sizehint!(heap_a, nvars) # what does sizehint really do
+    sizehint!(heap_v, nvars)
+
+    V = VSIDSState(activity, 1.0, decay, max_thresh, heap_a, heap_v)
+
+    for v in 1:nvars
+        heap_push!(V,0.0,v) # pushes 0.0 to heap_a and v to heap_v 
+    end
+
+    return V 
 end
 
 @inline function bump_var!(V::VSIDSState, v::Int)
     # increase variable v by var_inc
     V.activity[v] += V.var_inc
+    heap_push!(V, V.activity[v], v)
+    return nothing 
 end
 
 @inline function decay!(V::VSIDSState)
@@ -50,19 +66,85 @@ end
 
 function pick_branch_var(V::VSIDSState, model::Vector{Int8})::Int
     # picks the unassigned var with the max activity
-    best_v = 0
-    best_a = -Inf
+    while !isempty(V.heap_a)
+        a, v = heap_pop!(V)
 
-    @inbounds for v in 1:length(model)
-        if model[v] == Int8(0)
-            a = V.activity[v]
-            if a > best_a
-                best_a = a
-                best_v = v
-            end
+        if model[v] != Int8(0)
+            continue 
         end
+
+        if a != V.activity[v] # ?
+            continue
+        end
+
+        return v 
     end
-    return best_v
+
+    return 0 
 end
 
+
+## heap helper functions
+
+@inline function heap_swap!(V::VSIDSState, i::Int, j::Int)
+    V.heap_a[i], V.heap_a[j] = V.heap_a[j], V.heap_a[i]
+    V.heap_v[i], V.heap_v[j] = V.heap_v[j], V.heap_v[i]
+end
+
+function heap_push!(V::VSIDSState, a::Float64, v::Int)
+    push!(V.heap_a, a)
+    push!(V.heap_v, v)
+    i = length(V.heap_a) # last element of the heap, i.e. the most recently added one
+
+    # sift up as necessary 
+    while i > 1
+        p = i >>> 1 # compute parent in heap
+        if V.heap_a[p] >= V.heap_a[i]
+            break 
+        end
+        heap_swap!(V, p, i)
+        i = p
+    end
+    return nothing 
+end
+
+function heap_pop!(V:VSIDSState)
+    n = length(V.heap_a)
+    @assert n > 0
+
+    a = V.heap_a[1] # grab the first entry of each heap
+    v = V.heap_v[1] 
+
+    if n == 1
+        pop!(V.heap_a); pop!(V.heap_v)
+        return a, v
+    end
+
+    # move last to root
+    V.heap_a[1] = V.heap_a[end]
+    V.heap_v[1] = V.heap_v[end]
+    pop!(V.heap_a); pop!(V.heap_v)
+
+    # sift down
+    i = 1
+    n = length(V.heap_a)
+    while true
+        l = i << 1 # child 1
+        r = i + 1 # child 2
+        if l > n
+            break
+        end
+        j = l 
+        if r <= n && V.heap_a[r] > V.heap_a[l] # determine whether l or r is larger child
+            j = r
+        end
+        if V.heap[i] >= V.heap[j] # all is in order 
+            break 
+        end
+        heap_swap!(V, i, j)
+        i = j # perform swap and repeat if necessary 
+    end
+    return a, v
+end 
+## 
 end
