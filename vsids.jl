@@ -1,6 +1,6 @@
 module VSIDS
 
-export VSIDSState, init_vsids, bump_var!, decay!, maybe_rescale!, bump_clause!, pick_branch_var
+export VSIDSState, init_vsids, maybe_rescale!, bump_clause!, pick_branch_var
 
 mutable struct VSIDSState
     activity::Vector{Float64}
@@ -9,7 +9,7 @@ mutable struct VSIDSState
     max_thresh::Float64
 
     heap_a::Vector{Float64} # activity heap
-    heap_v::Vector{Float64} # variable heap 
+    heap_v::Vector{Int} # variable heap 
 end
 
 function init_vsids(nvars::Int, decay::Float64 = 0.95, max_thresh::Float64 = 1e100)
@@ -39,6 +39,7 @@ end
 @inline function decay!(V::VSIDSState)
     # apply decay after conflict to increase var_inc 
     V.var_inc /= V.decay
+    return nothing
 end
 
 function maybe_rescale!(V::VSIDSState)
@@ -49,6 +50,8 @@ function maybe_rescale!(V::VSIDSState)
             V.activity[i] *= scale
         end
         V.var_inc *= scale
+
+        rebuild_heap!(V)
     end
     return nothing
 end
@@ -61,6 +64,11 @@ function bump_clause!(V::VSIDSState, clause::Vector{Int})
     end
     decay!(V)
     maybe_rescale!(V)
+
+    if length(V.heap_a) > 10 * length(V.activity) # automatic trigger if we hit too many stale entries 
+        rebuild_heap!(V)
+    end
+
     return nothing
 end
 
@@ -73,7 +81,7 @@ function pick_branch_var(V::VSIDSState, model::Vector{Int8})::Int
             continue 
         end
 
-        if a != V.activity[v] # ?
+        if a < V.activity[v] # becaus we can have stale entries 
             continue
         end
 
@@ -89,6 +97,7 @@ end
 @inline function heap_swap!(V::VSIDSState, i::Int, j::Int)
     V.heap_a[i], V.heap_a[j] = V.heap_a[j], V.heap_a[i]
     V.heap_v[i], V.heap_v[j] = V.heap_v[j], V.heap_v[i]
+    return nothing 
 end
 
 function heap_push!(V::VSIDSState, a::Float64, v::Int)
@@ -108,7 +117,7 @@ function heap_push!(V::VSIDSState, a::Float64, v::Int)
     return nothing 
 end
 
-function heap_pop!(V:VSIDSState)
+function heap_pop!(V::VSIDSState)
     n = length(V.heap_a)
     @assert n > 0
 
@@ -130,7 +139,7 @@ function heap_pop!(V:VSIDSState)
     n = length(V.heap_a)
     while true
         l = i << 1 # child 1
-        r = i + 1 # child 2
+        r = l + 1 # child 2
         if l > n
             break
         end
@@ -138,7 +147,7 @@ function heap_pop!(V:VSIDSState)
         if r <= n && V.heap_a[r] > V.heap_a[l] # determine whether l or r is larger child
             j = r
         end
-        if V.heap[i] >= V.heap[j] # all is in order 
+        if V.heap_a[i] >= V.heap_a[j] # all is in order 
             break 
         end
         heap_swap!(V, i, j)
@@ -146,5 +155,17 @@ function heap_pop!(V:VSIDSState)
     end
     return a, v
 end 
+
+function rebuild_heap!(V::VSIDSState)
+    # just empty the heap and rebuild it using activity scores 
+    empty!(V.heap_a)
+    empty!(V.heap_v)
+    sizehint!(V.heap_a, length(V.activity))
+    sizehint!(V.heap_v, length(V.activity))
+    for v in 1:length(V.activity)
+        heap_push!(V, V.activity[v], v)
+    end
+    return nothing 
+end
 ## 
 end

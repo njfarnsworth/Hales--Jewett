@@ -3,11 +3,13 @@ include("dpll.jl")
 include("stats.jl")
 include("vsids.jl")
 include("phasesaving.jl")
+include("restarts.jl")
 
 using .DIMACS
 using .CDCLStats
 using .VSIDS
 using .PhaseSaving
+using .Restarts
 
 mutable struct Solver 
     # problem-specific
@@ -32,6 +34,7 @@ mutable struct Solver
     st::Stats
     vsids::VSIDSState
     phase::PhaseState
+    rst::RestartState
 end
 
 @inline function want_value(lit::Int)::Int8
@@ -89,9 +92,10 @@ function Solver(cnf::CNF)
 
     vs = init_vsids(n, 0.95, 1e100)
     ph = init_phase(n)
+    rst = init_restarts(1, 1.5) # MESS WITH THESE PARAMETERS 
 
-    return Solver(n,cls,model,level,antecedent, trail, 
-    trail_lim, qhead, watchlist, watch1, watch2, Stats(), vs, ph)
+    return Solver(n,cls,model,level,antecedent, trail, trail_lim, 
+    qhead, watchlist, watch1, watch2, Stats(), vs, ph, rst)
 end
 
 @inline decision_level(S::Solver) = length(S.trail_lim) # returns the current decision level of the solver
@@ -232,6 +236,10 @@ function propagate!(S::Solver)::Int
                     found_replacement = true
                     break
                 end
+            end
+
+            if found_replacement
+                continue
             end
 
             # no replacement found, clause is unit or conflicting
@@ -461,8 +469,6 @@ function analyze_conflict_1uip(S::Solver, conflict_cid::Int)
 end
 
 function solve_with_learning!(S::Solver)::Symbol
-    print("Solving with learning!")
-
     reset!(S.st)
     start_timer!(S.st)
 
@@ -505,7 +511,6 @@ function solve_with_learning!(S::Solver)::Symbol
             move_to_front!(learned, asserting)
             learned_cid = add_clause!(S, learned)
 
-            # --- instrumentation ---
             S.st.learned_clauses += 1
 
             backtrack!(S, backlvl)
@@ -515,6 +520,20 @@ function solve_with_learning!(S::Solver)::Symbol
             ok = enqueue!(S, asserting, learned_cid) # force the assering lit to be true 
             @assert ok
             # continue this loop until no more conflicts
+
+            on_conflict!(S.rst) # record that a conflict happened to RestartState
+
+
+            println("Conflicts:", S.rst.conflicts_since)
+            println("Limit: ", S.rst.limit)
+            println("Level:", decision_level(S))
+
+            if should_restart(S.rst) && decision_level(S) > 0 # if we should restart and we're not at the root 
+                backtrack!(S,0) # backtrack to the root
+                do_restart!(S.rst)
+                S.st.restarts += 1
+            end
+
         end
     end
 end

@@ -26,8 +26,6 @@ function run_file(filename::String)
     # Run full CDCL (it will do root unit enqueue + propagation internally)
     result = solve_with_learning!(S)
 
-    println("\nResult: ", result)
-
     println("\nFinal trail length: ", length(S.trail))
     println("Final decision level: ", decision_level(S))
 
@@ -46,9 +44,11 @@ function run_file(filename::String)
     end
 
     print_stats(S.st)
+    println("\nResult: ", result)
 end
 
 # Try a few files
-run_file("cnfs/hj/hj33_4.cnf")
+run_file("cnfs/hj/hj33_2.cnf")
 # run_file("cnfs/tiny_sat.cnf")
 # run_file("cnfs/tiny_unsat.cnf")
+

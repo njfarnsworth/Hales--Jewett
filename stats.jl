@@ -9,9 +9,9 @@ mutable struct Stats
     conflicts::Int
     backtracks::Int
     learned_clauses::Int
-    restarts::Int
-    solve_time_ns::UInt64 # why UInt?
+    solve_time_ns::UInt64 
     start_time_ns::UInt64
+    restarts::Int
 end
 
 Stats() = Stats(0,0,0,0,0,0,0,0,0,0)
@@ -24,9 +24,9 @@ function reset!(st::Stats)
     st.conflicts = 0
     st.backtracks = 0
     st.learned_clauses = 0
-    st.restarts = 0
     st.solve_time_ns = 0
     st.start_time_ns = 0
+    st.restarts = 0
 end
 
 function start_timer!(st::Stats)
@@ -46,8 +46,9 @@ function print_stats(st::Stats)
     println("conflicts:       ", st.conflicts)
     println("backtracks:      ", st.backtracks)
     println("learned clauses: ", st.learned_clauses)
-    println("restarts:        ", st.restarts)
+    println("restarts: ", st.restarts)
     println("solve time (ms): ", Float64(st.solve_time_ns)/1e6)
+   
 end
 
 end
